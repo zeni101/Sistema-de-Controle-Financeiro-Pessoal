@@ -1,3 +1,4 @@
+import sqlite3
 import customtkinter as ctk
 from tkinter import messagebox
 
@@ -20,11 +21,29 @@ TEXTO = "#1D2B22"
 
 app.configure(fg_color=FUNDO)
 
+#Banco de dados
+conn = sqlite3.connect("financeiro.db")
+cursor = conn.cursor()
+
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS financeiro(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tipo TEXT,
+        descricao TEXT,
+        valor REAL,
+        categoria TEXT
+    )
+""")
+cursor.execute("PRAGMA table_info(financeiro)")
+colunas = [coluna[1] for coluna in cursor.fetchall()]
+if "categoria" not in colunas:
+    cursor.execute("ALTER TABLE financeiro ADD COLUMN categoria TEXT")
+conn.commit()
+
 # Dados do sistema
 receita_atual = 0.0
 despesa_atual = 0.0
 movimentacoes = []
-
 
 def formatar_dinheiro(valor):
     valor_formatado = f"{valor:,.2f}"
@@ -32,7 +51,6 @@ def formatar_dinheiro(valor):
     valor_formatado = valor_formatado.replace(".", ",")
     valor_formatado = valor_formatado.replace("X", ".")
     return f"R$ {valor_formatado}"
-
 
 def atualizar_painel():
     saldo = receita_atual - despesa_atual
@@ -46,7 +64,6 @@ def atualizar_painel():
     label_saldo.configure(
         text=formatar_dinheiro(saldo)
     )
-
 
 def atualizar_historico():
     # Limpa as linhas anteriores
@@ -87,6 +104,17 @@ def atualizar_historico():
             text_color="gray"
         ).pack(anchor="w")
 
+        # Botão para excluir a movimentação
+        ctk.CTkButton(
+            linha,
+            text="X",
+            width=32,
+            height=32,
+            fg_color=VERMELHO,
+            hover_color="#A61B1B",
+            command=lambda id_mov=item["id"]: excluir_movimentacao(id_mov)
+        ).pack(side="right", padx=10)
+
         sinal = "+" if item["tipo"] == "Receita" else "-"
         cor = "#16834A" if item["tipo"] == "Receita" else VERMELHO
 
@@ -95,8 +123,51 @@ def atualizar_historico():
             text=f'{sinal} {formatar_dinheiro(item["valor"])}',
             font=("Arial", 14, "bold"),
             text_color=cor
-        ).pack(side="right", padx=15)
+        ).pack(side="right", padx=10)
 
+def excluir_movimentacao(id_movimentacao):
+    global receita_atual, despesa_atual
+
+    confirmar = messagebox.askyesno(
+        "Confirmar exclusão",
+        "Deseja realmente excluir esta movimentação?"
+    )
+
+    if not confirmar:
+        return
+
+    try:
+        cursor.execute(
+            "DELETE FROM financeiro WHERE id = ?",
+            (id_movimentacao,)
+        )
+        conn.commit()
+
+    except sqlite3.Error as erro:
+        messagebox.showerror(
+            "Erro!",
+            f"Não foi possível excluir a movimentação:\n{erro}"
+        )
+        return
+
+    # Remove da lista que está na memória
+    movimentacoes[:] = [
+        item for item in movimentacoes
+        if item["id"] != id_movimentacao
+    ]
+     # Recalcula receitas e despesas
+    receita_atual = 0.0
+    despesa_atual = 0.0
+
+    for item in movimentacoes:
+        if item["tipo"] == "Receita":
+            receita_atual += item["valor"]
+        elif item["tipo"] == "Despesa":
+            despesa_atual += item["valor"]
+
+    # Atualiza o painel e o histórico
+    atualizar_painel()
+    atualizar_historico()
 
 def adicionar_movimentacao(tipo):
     global receita_atual, despesa_atual
@@ -106,27 +177,38 @@ def adicionar_movimentacao(tipo):
 
     if not descricao:
         messagebox.showwarning(
-            "Atenção", "Preencha a descrição."
-        )
+            "Atenção", "Preencha a descrição.")
         return
-
     try:
         valor = float(valor_texto)
     except ValueError:
         messagebox.showerror(
-            "Erro", "Digite um valor numérico válido."
-        )
-        return
-
+            "Erro", "Digite um valor numérico válido.")
+        return   
     if valor <= 0:
         messagebox.showwarning(
             "Atenção", "O valor deve ser maior que zero."
         )
         return
-
     categoria = menu_categoria.get()
 
+    #Salvar no banco de dados
+    try:
+        cursor.execute("""INSERT INTO financeiro(
+            tipo, descricao, valor, categoria
+        )
+        VALUES(?,?,?,?)
+        """, (tipo, descricao, valor, categoria))
+        conn.commit()
+        id_movimentacao = cursor.lastrowid
+    except sqlite3.Error as erro:
+        messagebox.showerror(
+            "Erro!",
+            f"Não foi possível salvar a movimentação: \n{erro}"
+        )
+        return
     movimentacao = {
+        "id": id_movimentacao,
         "descricao": descricao,
         "valor": valor,
         "tipo": tipo,
@@ -146,6 +228,45 @@ def adicionar_movimentacao(tipo):
     entrada_descricao.delete(0, "end")
     entrada_valor.delete(0, "end")
 
+def carregar_movimentacoes():
+    global receita_atual, despesa_atual
+
+    # Consultar registros salvos
+    cursor.execute("""
+        SELECT id, tipo, descricao, valor, categoria
+        FROM financeiro
+        ORDER BY id ASC
+    """)
+    registros = cursor.fetchall()
+
+    movimentacoes.clear()
+    receita_atual = 0.0
+    despesa_atual = 0.0
+
+    for registro in registros:
+        id_mov, tipo, descricao, valor, categoria = registro
+
+        movimentacao = {
+            "id": id_mov,
+            "tipo": tipo,
+            "descricao": descricao,
+            "valor": valor,
+            "categoria": categoria or "Outros"
+        }
+
+        movimentacoes.append(movimentacao)
+
+        if tipo == "Receita":
+            receita_atual += valor
+        elif tipo == "Despesa":
+            despesa_atual += valor
+
+    atualizar_painel()
+    atualizar_historico()
+
+def fechar_app():
+    conn.close()
+    app.destroy()
 
 # Cabeçalho
 cabecalho = ctk.CTkFrame(
@@ -155,7 +276,7 @@ cabecalho.pack(fill="x")
 
 ctk.CTkLabel(
     cabecalho,
-    text="▣  MEU FINANCEIRO",
+    text="  MEU FINANCEIRO",
     font=("Arial", 21, "bold"),
     text_color=VERDE
 ).pack(side="left", padx=25, pady=20)
@@ -168,9 +289,7 @@ ctk.CTkLabel(
 
 
 # Conteúdo principal
-conteudo = ctk.CTkFrame(
-    app, fg_color="transparent"
-)
+conteudo = ctk.CTkFrame(app, fg_color="transparent")
 conteudo.pack(fill="both", expand=True, padx=25, pady=20)
 
 ctk.CTkLabel(
@@ -196,7 +315,6 @@ frame_cartoes.pack(fill="x", pady=(0, 20))
 
 for coluna in range(3):
     frame_cartoes.grid_columnconfigure(coluna, weight=1)
-
 
 def criar_cartao(coluna, titulo, cor_valor):
     cartao = ctk.CTkFrame(
@@ -224,9 +342,7 @@ def criar_cartao(coluna, titulo, cor_valor):
         text_color=cor_valor
     )
     valor.pack(anchor="w", padx=18)
-
     return valor
-
 
 label_receita = criar_cartao(0, "Receitas", "#16834A")
 label_despesa = criar_cartao(1, "Despesas", VERMELHO)
@@ -254,7 +370,6 @@ label_saldo = ctk.CTkLabel(
     text_color=BRANCO
 )
 label_saldo.pack(anchor="w", padx=18)
-
 
 # Formulário de lançamento
 formulario = ctk.CTkFrame(
@@ -333,7 +448,6 @@ ctk.CTkButton(
     command=lambda: adicionar_movimentacao("Despesa")
 ).pack(side="left", fill="x", expand=True, padx=(5, 0))
 
-
 # Histórico
 ctk.CTkLabel(
     conteudo,
@@ -349,7 +463,7 @@ frame_historico = ctk.CTkScrollableFrame(
 )
 frame_historico.pack(fill="both", expand=True)
 
-atualizar_painel()
-atualizar_historico()
+carregar_movimentacoes()
+app.protocol("WM_DELETE_WINDOW", fechar_app)
 
 app.mainloop()
