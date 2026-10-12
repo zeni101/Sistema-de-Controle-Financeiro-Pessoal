@@ -18,4 +18,4 @@ pip install -r e requirements.txt
 
 Execute o programa:
 
-python main.py
+python controle_financeiro.py
