@@ -1,6 +1,7 @@
 import sqlite3
-import customtkinter as ctk
+import math
 from tkinter import messagebox
+import customtkinter as ctk
 
 # Configuração da janela
 ctk.set_appearance_mode("light")
@@ -173,7 +174,10 @@ def adicionar_movimentacao(tipo):
     global receita_atual, despesa_atual
 
     descricao = entrada_descricao.get().strip()
-    valor_texto = entrada_valor.get().strip().replace(",", ".")
+    valor_texto = entrada_valor.get().strip()
+    if "," in valor_texto:
+        # Formato brasileiro: 1.500,50 -> 1500.50
+        valor_texto = valor_texto.replace(".", "").replace(",", ".")
 
     if not descricao:
         messagebox.showwarning(
@@ -181,10 +185,12 @@ def adicionar_movimentacao(tipo):
         return
     try:
         valor = float(valor_texto)
+        if not math.isfinite(valor):
+            raise ValueError
     except ValueError:
         messagebox.showerror(
             "Erro", "Digite um valor numérico válido.")
-        return   
+        return
     if valor <= 0:
         messagebox.showwarning(
             "Atenção", "O valor deve ser maior que zero."
@@ -227,6 +233,7 @@ def adicionar_movimentacao(tipo):
 
     entrada_descricao.delete(0, "end")
     entrada_valor.delete(0, "end")
+    entrada_descricao.focus()
 
 def carregar_movimentacoes():
     global receita_atual, despesa_atual
